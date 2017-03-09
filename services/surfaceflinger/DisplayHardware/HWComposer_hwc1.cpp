@@ -438,6 +438,26 @@ status_t HWComposer::queryDisplayProperties(int disp) {
             config.ydpi = dpi;
         }
 
+#ifdef NEEDS_ROCKCHIP_HACKS
+        {
+            int count = 0;
+            while (1 == disp && mDisplayData[disp].configs.size()) {
+                usleep(5000);
+                count ++;
+                if (200==count) {
+                    /*Of course,this cannot be happened:1s*/
+                    ALOGW("hotplug remove device,wait timeout");
+                    property_set("sys.hwc.htg", "false");
+                    return NO_INIT;
+                }
+            }
+
+            if (1 == disp) {
+                property_set("sys.hwc.htg", "true");
+            }
+        }
+#endif // NEEDS_ROCKCHIP_HACKS
+
         mDisplayData[disp].configs.push_back(config);
     }
 
