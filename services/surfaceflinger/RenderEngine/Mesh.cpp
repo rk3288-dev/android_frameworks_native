@@ -34,7 +34,6 @@ Mesh::Primitive Mesh::getPrimitive() const {
     return mPrimitive;
 }
 
-
 float const* Mesh::getPositions() const {
     return mVertices;
 }

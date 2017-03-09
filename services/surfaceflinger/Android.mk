@@ -34,11 +34,15 @@ LOCAL_SRC_FILES:= \
     RenderEngine/Texture.cpp \
     RenderEngine/GLES10RenderEngine.cpp \
     RenderEngine/GLES11RenderEngine.cpp \
-    RenderEngine/GLES20RenderEngine.cpp
+    RenderEngine/GLES20RenderEngine.cpp 
 
 
 LOCAL_CFLAGS:= -DLOG_TAG=\"SurfaceFlinger\"
 LOCAL_CFLAGS += -DGL_GLEXT_PROTOTYPES -DEGL_EGLEXT_PROTOTYPES
+
+ifeq ($(strip $(ENABLE_STEREO_DEFORM)),true)
+    LOCAL_CFLAGS += -DENABLE_VR
+endif
 
 ifeq ($(TARGET_BOARD_PLATFORM),omap4)
 	LOCAL_CFLAGS += -DHAS_CONTEXT_PRIORITY
@@ -61,6 +65,38 @@ endif
 
 ifeq ($(TARGET_RUNNING_WITHOUT_SYNC_FRAMEWORK),true)
     LOCAL_CFLAGS += -DRUNNING_WITHOUT_SYNC_FRAMEWORK
+else
+	ifneq ($(strip $(TARGET_BOARD_PLATFORM)),rk3288)
+		ifneq ($(strip $(TARGET_BOARD_PLATFORM)),rk3368)
+			ifneq ($(strip $(TARGET_BOARD_PLATFORM)),rk3366)
+				LOCAL_CFLAGS += -DUSE_PREPARE_FENCE
+			endif
+		endif
+	endif
+endif
+ifeq ($(strip $(TARGET_BOARD_PLATFORM)),rk3288)
+	LOCAL_CFLAGS += -DUSE_LCDC_COMPOSER -DFORCE_SCALE_FULLSCREEN
+endif
+ifeq ($(strip $(TARGET_BOARD_PLATFORM)),rk3368)
+	LOCAL_CFLAGS += -DUSE_LCDC_COMPOSER -DFORCE_SCALE_FULLSCREEN
+endif
+ifeq ($(strip $(TARGET_BOARD_PLATFORM)),rk3366)
+	LOCAL_CFLAGS += -DUSE_LCDC_COMPOSER -DFORCE_SCALE_FULLSCREEN
+endif
+ifeq ($(strip $(TARGET_BOARD_PLATFORM)),rk322x)
+        LOCAL_CFLAGS += -DFORCE_SCALE_FULLSCREEN
+endif
+
+ifeq ($(strip $(TARGET_BOARD_PLATFORM)),sofia3gr)
+    LOCAL_CFLAGS += -DUSE_SOFIA3GR
+endif
+
+ifeq ($(strip $(TARGET_BOARD_PLATFORM)),rk30xxb)
+    LOCAL_CFLAGS += -DTARGET_BOARD_PLATFORM_RK30XXB
+endif
+
+ifeq ($(strip $(TARGET_BOARD_PLATFORM_GPU)),G6110)
+	LOCAL_CFLAGS += -DGPU_G6110
 endif
 
 # See build/target/board/generic/BoardConfig.mk for a description of this setting.
@@ -81,6 +117,16 @@ ifneq ($(PRESENT_TIME_OFFSET_FROM_VSYNC_NS),)
     LOCAL_CFLAGS += -DPRESENT_TIME_OFFSET_FROM_VSYNC_NS=$(PRESENT_TIME_OFFSET_FROM_VSYNC_NS)
 else
     LOCAL_CFLAGS += -DPRESENT_TIME_OFFSET_FROM_VSYNC_NS=0
+endif
+
+ifeq ($(strip $(BOARD_USE_LCDC_COMPOSER)),true)
+    LOCAL_CFLAGS += -DUSE_LCDC_COMPOSER
+    ifeq ($(strip $(BOARD_LCDC_COMPOSER_LANDSCAPE_ONLY)),false)
+        LOCAL_CFLAGS += -DLCDC_COMPOSER_FULL_ANGLE
+    endif
+endif
+ifeq ($(strip $(BOARD_ENABLE_WFD_SKIP_FRAME)),true)
+    LOCAL_CFLAGS += -DENABLE_WFD_SKIP_FRAME
 endif
 
 ifneq ($(MAX_VIRTUAL_DISPLAY_DIMENSION),)
@@ -104,7 +150,7 @@ LOCAL_SHARED_LIBRARIES := \
 	libbinder \
 	libui \
 	libgui \
-	libpowermanager
+	libpowermanager 
 
 LOCAL_MODULE:= libsurfaceflinger
 

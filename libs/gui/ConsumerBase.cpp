@@ -55,7 +55,8 @@ static int32_t createProcessUniqueId() {
 
 ConsumerBase::ConsumerBase(const sp<IGraphicBufferConsumer>& bufferQueue, bool controlledByApp) :
         mAbandoned(false),
-        mConsumer(bufferQueue) {
+        mConsumer(bufferQueue),
+        mAlreadyStereo(0) {
     // Choose a name using the PID and a process-unique ID.
     mName = String8::format("unnamed-%d-%d", getpid(), createProcessUniqueId());
 
@@ -196,7 +197,14 @@ status_t ConsumerBase::acquireBufferLocked(BufferQueue::BufferItem *item,
     CB_LOGV("acquireBufferLocked: -> slot=%d/%" PRIu64,
             item->mBuf, item->mFrameNumber);
 
+    mAlreadyStereo = (item->mScalingMode & 0x300) >> 8;
+	item->mScalingMode = item->mScalingMode & ~0x300;
     return OK;
+}
+
+int32_t ConsumerBase::getAlreadyStereo() {
+    //ALOGD("djw: gui: mAlreadyStereo =%d",mAlreadyStereo);
+    return mAlreadyStereo;
 }
 
 status_t ConsumerBase::addReleaseFence(int slot,

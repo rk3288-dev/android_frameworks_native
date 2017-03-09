@@ -22,9 +22,9 @@
 #include "ProgramCache.h"
 #include "Description.h"
 #include <utils/String8.h>
+#include <cutils/properties.h>
 
 namespace android {
-
 Program::Program(const ProgramCache::Key& /*needs*/, const char* vertex, const char* fragment)
         : mInitialized(false) {
     GLuint vertexId = buildShader(vertex, GL_VERTEX_SHADER);
@@ -34,6 +34,11 @@ Program::Program(const ProgramCache::Key& /*needs*/, const char* vertex, const c
     glAttachShader(programId, fragmentId);
     glBindAttribLocation(programId, position, "position");
     glBindAttribLocation(programId, texCoords, "texCoords");
+    glBindAttribLocation(programId, texCoords_r, "texCoords_r");
+    glBindAttribLocation(programId, texCoords_g, "texCoords_g");
+    glBindAttribLocation(programId, texCoords_b, "texCoords_b");
+    glBindAttribLocation(programId, texCoords_offdeform, "texCoords_offdeform");
+
     glLinkProgram(programId);
 
     GLint status;
@@ -126,8 +131,8 @@ String8& Program::dumpShader(String8& result, GLenum /*type*/) {
 void Program::setUniforms(const Description& desc) {
 
     // TODO: we should have a mechanism here to not always reset uniforms that
-    // didn't change for this program.
 
+    // didn't change for this program.
     if (mSamplerLoc >= 0) {
         glUniform1i(mSamplerLoc, 0);
         glUniformMatrix4fv(mTextureMatrixLoc, 1, GL_FALSE, desc.mTexture.getMatrix().asArray());
@@ -135,6 +140,7 @@ void Program::setUniforms(const Description& desc) {
     if (mAlphaPlaneLoc >= 0) {
         glUniform1f(mAlphaPlaneLoc, desc.mPlaneAlpha);
     }
+
     if (mColorLoc >= 0) {
         glUniform4fv(mColorLoc, 1, desc.mColor);
     }
@@ -143,6 +149,7 @@ void Program::setUniforms(const Description& desc) {
     }
     // these uniforms are always present
     glUniformMatrix4fv(mProjectionMatrixLoc, 1, GL_FALSE, desc.mProjectionMatrix.asArray());
+
 }
 
 } /* namespace android */

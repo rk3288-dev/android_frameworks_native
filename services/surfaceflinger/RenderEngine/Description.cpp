@@ -33,6 +33,10 @@ Description::Description() :
     mOpaque = true;
     mTextureEnabled = false;
     mColorMatrixEnabled = false;
+#ifdef ENABLE_VR
+    mDeformEnabled = false;
+    mDispersionEnabled = false;
+#endif
 
     memset(mColor, 0, sizeof(mColor));
 }
@@ -87,6 +91,24 @@ void Description::setColorMatrix(const mat4& mtx) {
     mColorMatrix = mtx;
     mColorMatrixEnabled = (mtx != identity);
 }
+
+#ifdef ENABLE_VR
+void Description::setDeform(bool deformstus ) {
+    mDeformEnabled = deformstus;
+}
+
+void Description::setDisper(bool disperstus ) {
+    mDispersionEnabled = disperstus;
+}
+
+void Description::setFogborder(bool disperstus ) {
+    mFogborderEnabled = disperstus;
+}
+
+void Description::setVREnable(bool disperstus ) {
+    mVREnabled = disperstus;
+}
+#endif
 
 
 } /* namespace android */

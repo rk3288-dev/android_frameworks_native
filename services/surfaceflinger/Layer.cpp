@@ -81,7 +81,9 @@ Layer::Layer(SurfaceFlinger* flinger, const sp<Client>& client,
         mProtectedByApp(false),
         mHasSurface(false),
         mClientRef(client),
-        mPotentialCursor(false)
+        mPotentialCursor(false),
+        mDrawingScreenshot(false),
+        mStereoMode(0)
 {
     mCurrentCrop.makeInvalid();
     mFlinger->getRenderEngine().genTextures(1, &mTextureName);
@@ -115,6 +117,7 @@ Layer::Layer(SurfaceFlinger* flinger, const sp<Client>& client,
     nsecs_t displayPeriod =
             flinger->getHwComposer().getRefreshPeriod(HWC_DISPLAY_PRIMARY);
     mFrameTracker.setDisplayRefreshPeriod(displayPeriod);
+    mLastRealtransform = 0;
 }
 
 void Layer::onFirstRef() {
@@ -137,6 +140,17 @@ void Layer::onFirstRef() {
 
     const sp<const DisplayDevice> hw(mFlinger->getDefaultDisplayDevice());
     updateTransformHint(hw);
+    const State& s(getDrawingState());
+    const Transform bufferOrientation(mCurrentTransform);
+    uint32_t realtransform = (hw->getTransform(false) * s.transform * bufferOrientation).getOrientation();
+    if(mFlinger->mUseLcdcComposer )
+    {
+        if (mFlinger->mUseLcdcComposer && strcmp("com.android.systemui.ImageWallpaper", mName.string())) {
+            realtransform = (hw->getTransform(false)).getOrientation() | 0x08;
+            realtransform = (realtransform << 24) & GRALLOC_USAGE_ROT_MASK;
+            mSurfaceFlingerConsumer->setConsumerUsageBits(getEffectiveUsage(realtransform));
+        }
+    }
 }
 
 Layer::~Layer() {
@@ -169,6 +183,16 @@ void Layer::onFrameAvailable(const BufferItem& item) {
 
     android_atomic_inc(&mQueuedFrames);
     mFlinger->signalLayerUpdate();
+    if (mFlinger->mUseLcdcComposer && strcmp("com.android.systemui.ImageWallpaper", getName().string()))
+    {
+        const sp<const DisplayDevice> hw(mFlinger->getDefaultDisplayDevice());
+        uint32_t realtransform = (hw->getTransform(false)).getOrientation() | 0x08;
+        if (mLastRealtransform!=realtransform) {
+            mLastRealtransform = realtransform;
+            realtransform = (realtransform << 24) & GRALLOC_USAGE_ROT_MASK;
+            mSurfaceFlingerConsumer->setConsumerUsageBits(getEffectiveUsage(realtransform));
+        }
+    }
 }
 
 void Layer::onFrameReplaced(const BufferItem& item) {
@@ -407,6 +431,8 @@ FloatRect Layer::computeCrop(const sp<const DisplayDevice>& hw) const {
     return crop;
 }
 
+static int fd_dvfs = -1;
+static int dvfs_stat = 0;
 void Layer::setGeometry(
     const sp<const DisplayDevice>& hw,
         HWComposer::HWCLayerInterface& layer)
@@ -422,10 +448,15 @@ void Layer::setGeometry(
 
     // this gives us only the "orientation" component of the transform
     const State& s(getDrawingState());
+#ifndef USE_LCDC_COMPOSER
+    if (s.alpha < 0xFF) {
+        layer.setSkip(true);   // 32lcdc can support ,so it dont skip
+    }
+#endif
     if (!isOpaque(s) || s.alpha != 0xFF) {
-        layer.setBlending(mPremultipliedAlpha ?
+        layer.setBlending( (mPremultipliedAlpha ?
                 HWC_BLENDING_PREMULT :
-                HWC_BLENDING_COVERAGE);
+                HWC_BLENDING_COVERAGE) |s.alpha<<16);
     }
 
     // apply the layer's transform, followed by the display's global transform
@@ -497,9 +528,35 @@ void Layer::setGeometry(
     const uint32_t orientation = transform.getOrientation();
     if (orientation & Transform::ROT_INVALID) {
         // we can only handle simple transformation
+        if(fd_dvfs < 0)
+            fd_dvfs = open("/sys/devices/ffa30000.gpu/dvfs", O_RDWR, 0);
+        if(fd_dvfs > 0 && dvfs_stat == 0)
+        {
+            write(fd_dvfs,"off",3);
+            dvfs_stat = 1;
+        }
         layer.setSkip(true);
     } else {
+        if(fd_dvfs > 0 && dvfs_stat == 1)
+        {
+            write(fd_dvfs,"on",2);
+            dvfs_stat = 0;
+        }
+        uint32_t realtransform = (hw->getTransform(false) * s.transform * bufferOrientation).getOrientation();
         layer.setTransform(orientation);
+        if(mFlinger->mUseLcdcComposer )
+        {
+            layer.setRealTransform(tr.getOrientation());
+            if (mFlinger->mUseLcdcComposer && strcmp("com.android.systemui.ImageWallpaper", mName.string())) {
+                realtransform = (hw->getTransform(false)).getOrientation() | 0x08;
+                realtransform = (realtransform << 24) & GRALLOC_USAGE_ROT_MASK;
+                mSurfaceFlingerConsumer->setConsumerUsageBits(getEffectiveUsage(realtransform));
+            }
+            else
+            {
+                layer.setTransform(orientation); // Wallpaper force 0
+            }
+        }
     }
 }
 
@@ -521,6 +578,9 @@ void Layer::setPerFrameData(const sp<const DisplayDevice>& hw,
         // layer yet, or if we ran out of memory
         layer.setBuffer(mActiveBuffer);
     }
+    layer.setLayername(getName().string());
+    layer.setAlreadyStereo(mSurfaceFlingerConsumer->getAlreadyStereo());
+
 }
 
 void Layer::setAcquireFence(const sp<const DisplayDevice>& /* hw */,
@@ -530,7 +590,10 @@ void Layer::setAcquireFence(const sp<const DisplayDevice>& /* hw */,
     // TODO: there is a possible optimization here: we only need to set the
     // acquire fence the first time a new buffer is acquired on EACH display.
 
-    if (layer.getCompositionType() == HWC_OVERLAY || layer.getCompositionType() == HWC_CURSOR_OVERLAY) {
+    // if (layer.getCompositionType() == HWC_OVERLAY || layer.getCompositionType()==100) {
+#ifndef USE_PREPARE_FENCE
+    if (layer.getCompositionType() != HWC_FRAMEBUFFER) {
+#endif
         sp<Fence> fence = mSurfaceFlingerConsumer->getCurrentFence();
         if (fence->isValid()) {
             fenceFd = fence->dup();
@@ -538,8 +601,32 @@ void Layer::setAcquireFence(const sp<const DisplayDevice>& /* hw */,
                 ALOGW("failed to dup layer fence, skipping sync: %d", errno);
             }
         }
+#ifndef USE_PREPARE_FENCE
     }
+#else
+    ALOGV("isValid=%d,fenceFd=%d,name=%s",fence->isValid(),fenceFd,getName().string());
+#endif
     layer.setAcquireFenceFd(fenceFd);
+}
+
+void Layer::setDisplayStereo(const sp<const DisplayDevice>& hw,
+        HWComposer::HWCLayerInterface& layer) {
+    displayStereo = layer.getDisplayStereo();
+}
+
+int32_t Layer::getAlreadyStereo(const sp<const DisplayDevice>& hw,
+        HWComposer::HWCLayerInterface& layer) {
+    return layer.getAlreadyStereo();
+}
+
+void Layer::setAlreadyStereo(const sp<const DisplayDevice>& hw,
+        HWComposer::HWCLayerInterface& layer,int flag) {
+    mStereoMode = flag;
+    return layer.setAlreadyStereo(flag);
+}
+
+int Layer::getStereoModeToDraw()const{
+    return mStereoMode;
 }
 
 Rect Layer::getPosition(
@@ -676,6 +763,427 @@ void Layer::onDraw(const sp<const DisplayDevice>& hw, const Region& clip,
 }
 
 
+#ifdef ENABLE_VR
+void Layer::print3dLog(int alreadyStereo, int displayStereo) const {
+    //The other part of 3d log is written in GLES20RenderEngine.
+    char value[PROPERTY_VALUE_MAX];
+    property_get("sys.3d.log", value, "0");
+    int log3d = atoi(value);
+    if(1==log3d){
+        int temp;
+        ALOGD("3dlog:(setStereoDraw):==========================3D Log============================");
+        ALOGD("3dlog:(setStereoDraw):***Stereo Draw Flow:");
+        ALOGD("3dlog:(setStereoDraw):  alreadyStereo = %d   displayStereo = %d",alreadyStereo,displayStereo);
+
+        //Distortion property value
+        property_get("sys.3d.deform_red1", value, "0");
+        float rk1 = atof(value);
+        property_get("sys.3d.deform_red2", value, "0");
+        float rk2 = atof(value);
+        property_get("sys.3d.deform_green1", value, "0");
+        float gk1 = atof(value);
+        property_get("sys.3d.deform_green2", value, "0");
+        float gk2 = atof(value);
+        property_get("sys.3d.deform_blue1", value, "0");
+        float bk1 = atof(value);
+        property_get("sys.3d.deform_blue2", value, "0");
+        float bk2 = atof(value);
+        ALOGD("3dlog:(setStereoDraw):***Distortion Arguments:");
+        property_get("debug.sf.dispersion", value, "0");
+        temp = atoi(value);
+        ALOGD("3dlog:(setStereoDraw):  Light Dispersion-------------%d",temp);
+        ALOGD("3dlog:(setStereoDraw):  red:   k1 = %f,    k2 = %f",rk1,rk2);
+        ALOGD("3dlog:(setStereoDraw):  green: k1 = %f,    k2 = %f",gk1,gk2);
+        ALOGD("3dlog:(setStereoDraw):  blue:  k1 = %f,    k2 = %f",bk1,bk2);
+
+        //IPD property value
+        ALOGD("3dlog:(setStereoDraw):***IPD Value:");
+        property_get("sys.3d.ipd_offset", value, "0");
+        temp = atoi(value);
+        ALOGD("3dlog:(setStereoDraw):  ipd_offset mode:  IPD = %d",temp);
+        property_get("sys.3d.ipd_scale", value, "0");
+        temp = atoi(value);
+        ALOGD("3dlog:(setStereoDraw):  ipd_scale  mode:  IPD = %d",temp);
+        property_get("sys.game.3d.depth", value, "0");
+        temp = atoi(value);
+        ALOGD("3dlog:(setStereoDraw):  Enhanced3D mode:  IPD = %d",temp);
+
+        //3D property value
+        ALOGD("3dlog:(setStereoDraw):***3D Property Value:");
+        property_get("sys.hwc.force3d.primary", value, "0");
+        temp = atoi(value);
+        ALOGD("3dlog:(setStereoDraw):  sys.hwc.force3d.primary------%d",temp);
+        property_get("sys.3d.layer.flow", value, "0");
+        temp = atoi(value);
+        ALOGD("3dlog:(setStereoDraw):  sys.3d.layer.flow------------%d",temp);
+        property_get("sys.game.3d", value, "0");
+        temp = atoi(value);
+        ALOGD("3dlog:(setStereoDraw):  sys.game.3d------------------%d",temp);
+        property_get("sys.hwc.compose_policy", value, "0");
+        temp = atoi(value);
+        ALOGD("3dlog:(setStereoDraw):  sys.hwc.compose_policy-------%d",temp);
+        property_get("debug.sf.dispersion", value, "0");
+        temp = atoi(value);
+        ALOGD("3dlog:(setStereoDraw):  debug.sf.dispersion----------%d",temp);
+
+    }
+}
+
+void Layer::setStereoDraw(const sp<const DisplayDevice>& hw, RenderEngine& engine,
+	Mesh& mMesh, int alreadyStereo, int displayStereo) const
+{
+    int hw_w = hw->getWidth();
+    int hw_h = hw->getHeight();
+    ALOGD("psy w=%d  h=%d",hw_w,hw_h);
+
+//    engine.queryCaptureScreen();
+
+    Mesh::VertexArray<vec2> position(mMesh.getPositionArray<vec2>());
+    Mesh::VertexArray<vec2> texCoords(mMesh.getTexCoordArray<vec2>());
+
+    char value[PROPERTY_VALUE_MAX];
+    property_get("sys.3d.height", value, "0.5");
+    float heightScale = atof(value);
+
+    vec2 margin = vec2(0.0, 0.0);
+
+//    ALOGD("layer-djw:position[0]=(%f,%f)",position[0].x,position[0].y);
+//    ALOGD("layer-djw:position[1]=(%f,%f)",position[1].x,position[1].y);
+//    ALOGD("layer-djw:position[2]=(%f,%f)",position[2].x,position[2].y);
+//    ALOGD("layer-djw:position[3]=(%f,%f)",position[3].x,position[3].y);
+
+//    ALOGD("layer-djw:texCoords[0]=[%f,%f]",texCoords[0].x,texCoords[0].y);
+//    ALOGD("layer-djw:texCoords[1]=[%f,%f]",texCoords[1].x,texCoords[1].y);
+//    ALOGD("layer-djw:texCoords[2]=[%f,%f]",texCoords[2].x,texCoords[2].y);
+//    ALOGD("layer-djw:texCoords[3]=[%f,%f]",texCoords[3].x,texCoords[3].y);
+
+    /*********displayStereo==1***********/
+    //fake-3d layer
+    if((1==displayStereo && !alreadyStereo)){
+
+        position[0].x = position[0].x * 0.5;
+        position[1].x = position[1].x * 0.5;
+        position[2].x = position[2].x * 0.5;
+        position[3].x = position[3].x * 0.5;
+
+        position[0].y = position[0].y * heightScale;
+        position[1].y = position[1].y * heightScale;
+        position[2].y = position[2].y * heightScale;
+        position[3].y = position[3].y * heightScale;
+
+        position[0] = position[0] + margin;
+        position[1] = position[1] + margin;
+        position[2] = position[2] + margin;
+        position[3] = position[3] + margin;
+
+        if(engine.queryCaptureScreen()){
+            for(int i=0;i<4;i++)
+                position[i].y = position[i].y + hw_h * (1.0 - heightScale);
+        }
+
+        if(!engine.queryCaptureScreen()){
+            texCoords[0] = vec2(0, 1);
+            texCoords[1] = vec2(0, 0);
+            texCoords[2] = vec2(1, 0);
+            texCoords[3] = vec2(1, 1);
+        }else{
+            texCoords[0] = vec2(1, 1);
+            texCoords[1] = vec2(1, 0);
+            texCoords[2] = vec2(0, 0);
+            texCoords[3] = vec2(0, 1);
+        }
+
+        engine.drawLeftFBO(mMesh);
+        return;
+    }
+
+    //real-3d layer
+    if((1==displayStereo && 1 == alreadyStereo)) {
+        engine.enableRightFBO(true);
+
+        position[0].x = position[0].x * 0.5;
+        position[1].x = position[1].x * 0.5;
+        position[2].x = position[2].x * 0.5;
+        position[3].x = position[3].x * 0.5;
+
+        position[0].y = position[0].y * heightScale;
+        position[1].y = position[1].y * heightScale;
+        position[2].y = position[2].y * heightScale;
+        position[3].y = position[3].y * heightScale;
+
+        position[0] = position[0] + margin;
+        position[1] = position[1] + margin;
+        position[2] = position[2] + margin;
+        position[3] = position[3] + margin;
+
+        if(engine.queryCaptureScreen()){
+            for(int i=0;i<4;i++)
+                position[i].y = position[i].y + hw_h * (1.0 - heightScale);
+        }
+
+        if(!engine.queryCaptureScreen()){
+            texCoords[0] = vec2(0, 1);
+            texCoords[1] = vec2(0, 0);
+            texCoords[2] = vec2(0.5, 0);
+            texCoords[3] = vec2(0.5, 1);
+        }else{
+            texCoords[0] = vec2(0.5, 1);
+            texCoords[1] = vec2(0.5, 0);
+            texCoords[2] = vec2(0, 0);
+            texCoords[3] = vec2(0, 1);
+        }
+        engine.drawRightFBO(mMesh);
+
+        if(!engine.queryCaptureScreen()){
+            texCoords[0] = vec2(0.5, 1);
+            texCoords[1] = vec2(0.5, 0);
+            texCoords[2] = vec2(1, 0);
+            texCoords[3] = vec2(1, 1);
+        }else{
+            texCoords[0] = vec2(1, 1);
+            texCoords[1] = vec2(1, 0);
+            texCoords[2] = vec2(0.5, 0);
+            texCoords[3] = vec2(0.5, 1);
+        }
+        engine.drawLeftFBO(mMesh);
+        return;
+    }
+
+    //fake-3d layer which come with real-3D layer,we have set 2 to alreadyStereo before
+    if((1==displayStereo && 2 == alreadyStereo)) {
+        engine.enableRightFBO(true);
+
+        position[0].x = position[0].x * 0.5;
+        position[1].x = position[1].x * 0.5;
+        position[2].x = position[2].x * 0.5;
+        position[3].x = position[3].x * 0.5;
+
+        position[0].y = position[0].y * heightScale;
+        position[1].y = position[1].y * heightScale;
+        position[2].y = position[2].y * heightScale;
+        position[3].y = position[3].y * heightScale;
+
+        position[0] = position[0] + margin;
+        position[1] = position[1] + margin;
+        position[2] = position[2] + margin;
+        position[3] = position[3] + margin;
+
+        if(engine.queryCaptureScreen()){
+            for(int i=0;i<4;i++)
+                position[i].y = position[i].y + hw_h * (1.0 - heightScale);
+        }
+
+        if(!engine.queryCaptureScreen()){
+            texCoords[0] = vec2(0, 1);
+            texCoords[1] = vec2(0, 0);
+            texCoords[2] = vec2(1, 0);
+            texCoords[3] = vec2(1, 1);
+        }else{
+            texCoords[0] = vec2(1, 1);
+            texCoords[1] = vec2(1, 0);
+            texCoords[2] = vec2(0, 0);
+            texCoords[3] = vec2(0, 1);
+        }
+
+        engine.drawLeftFBO(mMesh);
+        engine.drawRightFBO(mMesh);
+        return;
+    }
+    /*********displayStereo==1 ends***********/
+
+    /*********displayStereo==2***********/
+    //fake-3d layer
+    if((2==displayStereo && !alreadyStereo)) {
+        position[0].y = position[0].y * 0.5;
+        position[1].y = position[1].y * 0.5;
+        position[2].y = position[2].y * 0.5;
+        position[3].y = position[3].y * 0.5;
+
+        if(engine.queryCaptureScreen()){
+            for(int i=0;i<4;i++)
+                position[i].y = position[i].y + hw_h * 0.5;
+        }
+
+        position[0].x = position[0].x * heightScale;
+        position[1].x = position[1].x * heightScale;
+        position[2].x = position[2].x * heightScale;
+        position[3].x = position[3].x * heightScale;
+
+        position[0] = position[0] + margin;
+        position[1] = position[1] + margin;
+        position[2] = position[2] + margin;
+        position[3] = position[3] + margin;
+
+
+        if(!(engine.queryCaptureScreen())){
+            texCoords[0] = vec2(0, 1);
+            texCoords[1] = vec2(0, 0);
+            texCoords[2] = vec2(1, 0);
+            texCoords[3] = vec2(1, 1);
+        }else{
+            texCoords[0] = vec2(1, 1);
+            texCoords[1] = vec2(1, 0);
+            texCoords[2] = vec2(0, 0);
+            texCoords[3] = vec2(0, 1);
+        }
+
+        engine.drawLeftFBO(mMesh);
+        return;
+    }
+
+    //real-3d layer
+    if((2==displayStereo && 1 == alreadyStereo)){
+        engine.enableRightFBO(true);
+
+        position[0].y = position[0].y * 0.5;
+        position[1].y = position[1].y * 0.5;
+        position[2].y = position[2].y * 0.5;
+        position[3].y = position[3].y * 0.5;
+
+        if(engine.queryCaptureScreen()){
+            for(int i=0;i<4;i++)
+                position[i].y = position[i].y + hw_h * 0.5;
+        }
+
+        position[0].x = position[0].x * heightScale;
+        position[1].x = position[1].x * heightScale;
+        position[2].x = position[2].x * heightScale;
+        position[3].x = position[3].x * heightScale;
+
+        position[0] = position[0] + margin;
+        position[1] = position[1] + margin;
+        position[2] = position[2] + margin;
+        position[3] = position[3] + margin;
+
+        if(!engine.queryCaptureScreen()){
+            texCoords[0] = vec2(0, 1);
+            texCoords[1] = vec2(0, 0);
+            texCoords[2] = vec2(0.5, 0);
+            texCoords[3] = vec2(0.5, 1);
+        }else{
+            texCoords[0] = vec2(0.5, 1);
+            texCoords[1] = vec2(0.5, 0);
+            texCoords[2] = vec2(0, 0);
+            texCoords[3] = vec2(0, 1);
+        }
+        engine.drawRightFBO(mMesh);
+
+        if(!engine.queryCaptureScreen()){
+            texCoords[0] = vec2(0.5, 1);
+            texCoords[1] = vec2(0.5, 0);
+            texCoords[2] = vec2(1, 0);
+            texCoords[3] = vec2(1, 1);
+        }else{
+            texCoords[0] = vec2(1.0, 1);
+            texCoords[1] = vec2(1.0, 0);
+            texCoords[2] = vec2(0.5, 0);
+            texCoords[3] = vec2(0.5, 1);
+        }
+        engine.drawLeftFBO(mMesh);
+
+        return;
+    }
+
+    //fake-3d layer which come with real-3D layer,we have set 2 to alreadyStereo before
+    if((2==displayStereo && 2 == alreadyStereo)) {
+
+        engine.enableRightFBO(true);
+
+        position[0].y = position[0].y * 0.5;
+        position[1].y = position[1].y * 0.5;
+        position[2].y = position[2].y * 0.5;
+        position[3].y = position[3].y * 0.5;
+
+        if(engine.queryCaptureScreen()){
+            for(int i=0;i<4;i++)
+                position[i].y = position[i].y + hw_h * 0.5;
+        }
+
+        position[0].x = position[0].x * heightScale;
+        position[1].x = position[1].x * heightScale;
+        position[2].x = position[2].x * heightScale;
+        position[3].x = position[3].x * heightScale;
+
+        position[0] = position[0] + margin;
+        position[1] = position[1] + margin;
+        position[2] = position[2] + margin;
+        position[3] = position[3] + margin;
+
+        if(!engine.queryCaptureScreen()){
+            texCoords[0] = vec2(0, 1);
+            texCoords[1] = vec2(0, 0);
+            texCoords[2] = vec2(1, 0);
+            texCoords[3] = vec2(1, 1);
+        }else{
+            texCoords[0] = vec2(1, 1);
+            texCoords[1] = vec2(1, 0);
+            texCoords[2] = vec2(0, 0);
+            texCoords[3] = vec2(0, 1);
+        }
+
+        engine.drawLeftFBO(mMesh);
+        engine.drawRightFBO(mMesh);
+        return;
+    }
+    /*********displayStereo==2 ends***********/
+
+/*
+    if(8 == displayStereo){
+        position[0].y /= 2;
+        position[1].y /= 2;
+        position[2].y /= 2;
+        position[3].y /= 2;
+
+        position[2].y -= 45;
+        position[3].y -= 45;
+
+        engine.drawMesh(mMesh);
+
+        position[0].y +=  (hw->getHeight()/2);
+        position[1].y +=  (hw->getHeight()/2);
+        position[2].y +=  (hw->getHeight()/2);
+        position[3].y +=  (hw->getHeight()/2);
+
+        position[0].y += 45;
+        position[1].y += 45;
+        position[2].y += 45;
+        position[3].y += 45;
+    }
+*/
+}
+#else
+void setStereoDraw(const sp<const DisplayDevice>& hw, RenderEngine& engine,
+	Mesh& mMesh, int alreadyStereo, int displayStereo)
+{
+    Mesh::VertexArray<vec2> position(mMesh.getPositionArray<vec2>());
+
+    if(1==displayStereo && !alreadyStereo) {
+        position[0].x /= 2;
+        position[1].x /= 2;
+        position[2].x /= 2;
+        position[3].x /= 2;
+        engine.drawMesh(mMesh);
+
+        position[0].x += (hw->getWidth()/2);
+        position[1].x += (hw->getWidth()/2);
+        position[2].x += (hw->getWidth()/2);
+        position[3].x += (hw->getWidth()/2);
+    }
+
+    if(2==displayStereo && !alreadyStereo) {
+        position[0].y /= 2;
+        position[1].y /= 2;
+        position[2].y /= 2;
+        position[3].y /= 2;
+        engine.drawMesh(mMesh);
+
+        position[0].y += (hw->getHeight()/2);
+        position[1].y += (hw->getHeight()/2);
+        position[2].y += (hw->getHeight()/2);
+        position[3].y += (hw->getHeight()/2);
+    }
+}
+#endif
 void Layer::clearWithOpenGL(const sp<const DisplayDevice>& hw,
         const Region& /* clip */, float red, float green, float blue,
         float alpha) const
@@ -683,6 +1191,14 @@ void Layer::clearWithOpenGL(const sp<const DisplayDevice>& hw,
     RenderEngine& engine(mFlinger->getRenderEngine());
     computeGeometry(hw, mMesh, false);
     engine.setupFillWithColor(red, green, blue, alpha);
+
+    char value[PROPERTY_VALUE_MAX];
+    property_get("sys.3d.layer.flow", value, "0");
+    int draw_flow = atoi(value);
+#ifndef ENABLE_VR
+    setStereoDraw(hw, engine, mMesh,
+        mSurfaceFlingerConsumer->getAlreadyStereo(), displayStereo);
+#endif
     engine.drawMesh(mMesh);
 }
 
@@ -713,7 +1229,6 @@ void Layer::drawWithOpenGL(const sp<const DisplayDevice>& hw,
      * like more of a hack.
      */
     const Rect win(computeBounds());
-
     float left   = float(win.left)   / float(s.active.w);
     float top    = float(win.top)    / float(s.active.h);
     float right  = float(win.right)  / float(s.active.w);
@@ -729,7 +1244,24 @@ void Layer::drawWithOpenGL(const sp<const DisplayDevice>& hw,
 
     RenderEngine& engine(mFlinger->getRenderEngine());
     engine.setupLayerBlending(mPremultipliedAlpha, isOpaque(s), s.alpha);
+
+#ifdef ENABLE_VR
+    print3dLog(getStereoModeToDraw(), displayStereo);
+    char value[PROPERTY_VALUE_MAX];
+    property_get("sys.3d.layer.flow", value, "0");
+    int draw_flow = atoi(value);
+    if(draw_flow == 1){
+        setStereoDraw(hw, engine, mMesh,
+                /*getAlreadyStereo(hw,*cur)*/getStereoModeToDraw(),displayStereo);
+    }
+    else{
+        engine.drawMesh(mMesh);
+    }
+#else
+    setStereoDraw(hw, engine, mMesh,
+        mSurfaceFlingerConsumer->getAlreadyStereo(), displayStereo);
     engine.drawMesh(mMesh);
+#endif
     engine.disableBlending();
 }
 
@@ -781,10 +1313,13 @@ void Layer::computeGeometry(const sp<const DisplayDevice>& hw, Mesh& mesh,
         bool useIdentityTransform) const
 {
     const Layer::State& s(getDrawingState());
-    const Transform tr(useIdentityTransform ?
+    Transform tr(useIdentityTransform ?
             hw->getTransform() : hw->getTransform() * s.transform);
     const uint32_t hw_h = hw->getHeight();
     Rect win(s.active.w, s.active.h);
+    if (mDrawingScreenshot) {
+        computeHWGeometry(tr, s.transform, hw);
+    }
     if (!s.active.crop.isEmpty()) {
         win.intersect(s.active.crop, &win);
     }
@@ -801,6 +1336,51 @@ void Layer::computeGeometry(const sp<const DisplayDevice>& hw, Mesh& mesh,
     }
 }
 
+void Layer::computeHWGeometry(Transform& tr, const Transform& layerTransform, const sp<const DisplayDevice>& hw) const
+{
+    int hwrotation = mFlinger->getHardwareOrientation();
+    int hw_offset = hw->getWidth() - hw->getHeight();
+
+    if (hwrotation == DisplayState::eOrientation90) {
+        // 90 degree
+        tr = hw->getTransform(false) * layerTransform;
+        switch (hw->getHardwareRotation()){
+        case 0:
+            tr.set(tr.tx(), tr.ty());
+            break;
+        case 1:
+            tr.set(tr.tx(), tr.ty()-hw_offset);
+            break;
+        case 2:
+            tr.set(tr.tx()-hw_offset, tr.ty()-hw_offset);
+            break;
+        case 3:
+            tr.set(tr.tx()-hw_offset, tr.ty());
+            break;
+        }
+    } else if (hwrotation == DisplayState::eOrientation180) {
+        // 180 degree
+        tr = hw->getTransform(false) * layerTransform;
+        tr.set(tr.tx(), tr.ty());
+    } else if (hwrotation == DisplayState::eOrientation270) {
+        // 270 degree
+        tr = hw->getTransform(false) * layerTransform;
+        switch (hw->getHardwareRotation()){
+        case 0:
+            tr.set(tr.tx()-hw_offset, tr.ty()-hw_offset);
+            break;
+        case 1:
+            tr.set(tr.tx()-hw_offset, tr.ty());
+            break;
+        case 2:
+            tr.set(tr.tx(), tr.ty());
+            break;
+        case 3:
+            tr.set(tr.tx(), tr.ty()-hw_offset);
+            break;
+        }
+    }
+}
 bool Layer::isOpaque(const Layer::State& s) const
 {
     // if we don't have a buffer yet, we're translucent regardless of the
@@ -1235,6 +1815,9 @@ Region Layer::latchBuffer(bool& recomputeVisibleRegions)
             // Producer doesn't want buffer to be displayed yet.  Signal a
             // layer update so we check again at the next opportunity.
             mFlinger->signalLayerUpdate();
+#ifdef ENABLE_VR
+            //ALOGD("invilid too1");
+#endif
             return outDirtyRegion;
         }
 
@@ -1247,6 +1830,10 @@ Region Layer::latchBuffer(bool& recomputeVisibleRegions)
         // Decrement the queued-frames count.  Signal another event if we
         // have more frames pending.
         if (android_atomic_dec(&mQueuedFrames) > 1) {
+#ifdef ENABLE_VR
+            //ALOGD("invilid too2");
+#endif
+
             mFlinger->signalLayerUpdate();
         }
 
@@ -1340,6 +1927,12 @@ void Layer::updateTransformHint(const sp<const DisplayDevice>& hw) const {
 // debugging
 // ----------------------------------------------------------------------------
 
+void Layer::ReleaseOldBuffer()
+{
+    //if (mFlinger->mUseLcdcComposer) {
+       // mSurfaceFlingerConsumer->ReleaseOldBuffer();
+    //}
+}
 void Layer::dump(String8& result, Colorizer& colorizer) const
 {
     const Layer::State& s(getDrawingState());

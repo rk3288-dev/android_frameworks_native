@@ -6,9 +6,9 @@ include $(BUILD_STATIC_LIBRARY)
 
 include $(CLEAR_VARS)
 
-ifdef BOARD_WLAN_DEVICE
-LOCAL_CFLAGS := -DFWDUMP_$(BOARD_WLAN_DEVICE)
-endif
+#ifdef BOARD_WLAN_DEVICE
+#LOCAL_CFLAGS := -DFWDUMP_$(BOARD_WLAN_DEVICE)
+#endif
 
 LOCAL_SRC_FILES := dumpstate.c utils.c
 

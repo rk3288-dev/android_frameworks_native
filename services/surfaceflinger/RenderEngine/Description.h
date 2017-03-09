@@ -52,6 +52,12 @@ class Description {
     mat4 mProjectionMatrix;
 
     bool mColorMatrixEnabled;
+#ifdef ENABLE_VR
+    bool mDeformEnabled;
+    bool mDispersionEnabled;
+	bool mFogborderEnabled;
+	bool mVREnabled;
+#endif
     mat4 mColorMatrix;
 
 public:
@@ -66,6 +72,12 @@ public:
     void setColor(GLclampf red, GLclampf green, GLclampf blue, GLclampf alpha);
     void setProjectionMatrix(const mat4& mtx);
     void setColorMatrix(const mat4& mtx);
+#ifdef ENABLE_VR
+    void setDeform(bool deformstus);
+    void setDisper(bool disperstus);
+	void setFogborder(bool disperstus);
+	void setVREnable(bool disperstus);
+#endif
 
 private:
     bool mUniformsDirty;

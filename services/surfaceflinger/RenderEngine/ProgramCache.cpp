@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+
 #include <GLES2/gl2.h>
 #include <GLES2/gl2ext.h>
 
@@ -22,6 +23,7 @@
 #include "ProgramCache.h"
 #include "Program.h"
 #include "Description.h"
+#include <utils/Trace.h>
 
 namespace android {
 // -----------------------------------------------------------------------------------------------
@@ -87,6 +89,7 @@ ProgramCache::~ProgramCache() {
 }
 
 void ProgramCache::primeCache() {
+
     uint32_t shaderCount = 0;
     uint32_t keyMask = Key::BLEND_MASK | Key::OPACITY_MASK |
                        Key::PLANE_ALPHA_MASK | Key::TEXTURE_MASK;
@@ -117,6 +120,29 @@ void ProgramCache::primeCache() {
 
 ProgramCache::Key ProgramCache::computeKey(const Description& description) {
     Key needs;
+#ifdef ENABLE_VR
+    needs.set(Key::TEXTURE_MASK,
+            !description.mTextureEnabled ? Key::TEXTURE_OFF :
+            description.mTexture.getTextureTarget() == GL_TEXTURE_EXTERNAL_OES ? Key::TEXTURE_EXT :
+            description.mTexture.getTextureTarget() == GL_TEXTURE_2D           ? Key::TEXTURE_2D :
+            Key::TEXTURE_OFF)
+    .set(Key::PLANE_ALPHA_MASK,
+            (description.mPlaneAlpha < 1) ? Key::PLANE_ALPHA_LT_ONE : Key::PLANE_ALPHA_EQ_ONE)
+    .set(Key::BLEND_MASK,
+            description.mPremultipliedAlpha ? Key::BLEND_PREMULT : Key::BLEND_NORMAL)
+    .set(Key::OPACITY_MASK,
+            description.mOpaque ? Key::OPACITY_OPAQUE : Key::OPACITY_TRANSLUCENT)
+    .set(Key::COLOR_MATRIX_MASK,
+            description.mColorMatrixEnabled ? Key::COLOR_MATRIX_ON :  Key::COLOR_MATRIX_OFF)
+    .set(Key::DEFORMATION_MASK,
+            description.mDeformEnabled ? Key::DEFORMATION_ON : Key::DEFORMATION_OFF)
+    .set(Key::DISPERSION_MASK,
+            description.mDispersionEnabled ? Key::DISPERSION_ON : Key::DISPERSION_OFF)
+    .set(Key::FOGBORDER_MASK,
+            description.mFogborderEnabled ? Key::FOGBORDER_ON : Key::FOGBORDER_OFF)
+    .set(Key::VR_MASK,
+            description.mVREnabled ? Key::VR_ON : Key::VR_OFF);
+#else
     needs.set(Key::TEXTURE_MASK,
             !description.mTextureEnabled ? Key::TEXTURE_OFF :
             description.mTexture.getTextureTarget() == GL_TEXTURE_EXTERNAL_OES ? Key::TEXTURE_EXT :
@@ -130,6 +156,8 @@ ProgramCache::Key ProgramCache::computeKey(const Description& description) {
             description.mOpaque ? Key::OPACITY_OPAQUE : Key::OPACITY_TRANSLUCENT)
     .set(Key::COLOR_MATRIX_MASK,
             description.mColorMatrixEnabled ? Key::COLOR_MATRIX_ON :  Key::COLOR_MATRIX_OFF);
+#endif
+
     return needs;
 }
 
@@ -137,6 +165,15 @@ String8 ProgramCache::generateVertexShader(const Key& needs) {
     Formatter vs;
     if (needs.isTexturing()) {
         vs  << "attribute vec4 texCoords;"
+            << "attribute vec4 texCoords_r;"
+            << "attribute vec4 texCoords_g;"
+            << "attribute vec4 texCoords_b;"
+            << "attribute vec4 texCoords_offdeform;"
+
+            << "varying vec2 outTexCoords_r;"
+            << "varying vec2 outTexCoords_g;"
+            << "varying vec2 outTexCoords_b;"
+            << "varying vec2 outTexCoords_offdeform;"
             << "varying vec2 outTexCoords;";
     }
     vs << "attribute vec4 position;"
@@ -145,7 +182,11 @@ String8 ProgramCache::generateVertexShader(const Key& needs) {
        << "void main(void) {" << indent
        << "gl_Position = projection * position;";
     if (needs.isTexturing()) {
-        vs << "outTexCoords = (texture * texCoords).st;";
+        vs << "outTexCoords = (texture * texCoords).st;"
+           << "outTexCoords_r = (texture * texCoords_r).st;"
+           << "outTexCoords_g = (texture * texCoords_g).st;"
+           << "outTexCoords_b = (texture * texCoords_b).st;"
+           << "outTexCoords_offdeform = (texture * texCoords_offdeform).st;";
     }
     vs << dedent << "}";
     return vs.getString();
@@ -159,13 +200,24 @@ String8 ProgramCache::generateFragmentShader(const Key& needs) {
 
     // default precision is required-ish in fragment shaders
     fs << "precision mediump float;";
-
     if (needs.getTextureTarget() == Key::TEXTURE_EXT) {
         fs << "uniform samplerExternalOES sampler;"
-           << "varying vec2 outTexCoords;";
+           << "uniform sampler2D FogBorder;"
+           << "varying vec2 outTexCoords;"
+           << "varying vec2 outTexCoords_r;"
+           << "varying vec2 outTexCoords_g;"
+           << "varying vec2 outTexCoords_b;"
+           << "varying vec2 outTexCoords_offdeform;";
+
     } else if (needs.getTextureTarget() == Key::TEXTURE_2D) {
         fs << "uniform sampler2D sampler;"
-           << "varying vec2 outTexCoords;";
+
+           << "varying vec2 outTexCoords;"
+           << "varying vec2 outTexCoords_r;"
+           << "varying vec2 outTexCoords_g;"
+           << "varying vec2 outTexCoords_b;"
+           << "varying vec2 outTexCoords_offdeform;";
+
     } else if (needs.getTextureTarget() == Key::TEXTURE_OFF) {
         fs << "uniform vec4 color;";
     }
@@ -177,7 +229,39 @@ String8 ProgramCache::generateFragmentShader(const Key& needs) {
     }
     fs << "void main(void) {" << indent;
     if (needs.isTexturing()) {
+
+#ifdef ENABLE_VR
+    if(!needs.enableVRMode()){
         fs << "gl_FragColor = texture2D(sampler, outTexCoords);";
+    }else{
+        if(!needs.hasFogborder()){
+            fs << "float fade = 1.0;";
+        }else{
+            fs << "float scale = 20.0;";
+            fs << "float fade_top    = clamp(       outTexCoords_r.y  * scale,0.0,1.0);";
+            fs << "float fade_bottom = clamp((1.0 - outTexCoords_r.y) * scale,0.0,1.0);";
+            fs << "float fade_left   = clamp(       outTexCoords_r.x  * scale,0.0,1.0);";
+            fs << "float fade_right  = clamp((1.0 - outTexCoords_r.x) * scale,0.0,1.0);";
+            fs << "float fade = fade_top * fade_bottom * fade_left * fade_right;";
+        }
+        if(!needs.hasDeform()){
+            fs << "gl_FragColor   = texture2D(sampler, outTexCoords_offdeform) * fade;";
+            fs << "gl_FragColor.a = 1.0;";
+        }else{
+            if(!needs.hasDispersion()){
+                fs << "gl_FragColor   = texture2D(sampler, outTexCoords_r) * fade;";
+                fs << "gl_FragColor.a = 1.0;";
+            }else{
+                fs << "gl_FragColor.r = texture2D(sampler, outTexCoords_r).r * fade;";
+                fs << "gl_FragColor.g = texture2D(sampler, outTexCoords_g).g * fade;";
+                fs << "gl_FragColor.b = texture2D(sampler, outTexCoords_b).b * fade;";
+                fs << "gl_FragColor.a = 1.0;";
+            }
+        }
+    }
+#else
+        fs << "gl_FragColor = texture2D(sampler, outTexCoords);";
+#endif
     } else {
         fs << "gl_FragColor = color;";
     }
@@ -225,7 +309,6 @@ Program* ProgramCache::generateProgram(const Key& needs) {
 }
 
 void ProgramCache::useProgram(const Description& description) {
-
     // generate the key for the shader based on the description
     Key needs(computeKey(description));
 
@@ -241,13 +324,10 @@ void ProgramCache::useProgram(const Description& description) {
         //ALOGD(">>> generated new program: needs=%08X, time=%u ms (%d programs)",
         //        needs.mNeeds, uint32_t(ns2ms(time)), mCache.size());
     }
-
     // here we have a suitable program for this description
     if (program->isValid()) {
         program->use();
         program->setUniforms(description);
     }
 }
-
-
 } /* namespace android */

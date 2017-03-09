@@ -82,6 +82,10 @@ public:
     // the same.
     int32_t sequence;
 
+    int32_t displayStereo;
+
+    mutable int mStereoMode;
+
     enum { // flags for doTransaction()
         eDontUpdateGeometryState = 0x00000001,
         eVisibleRegion = 0x00000002,
@@ -137,11 +141,13 @@ public:
     bool setCrop(const Rect& crop);
     bool setLayerStack(uint32_t layerStack);
 
+    void setDrawingScreenshot(bool drawScreenshot) { mDrawingScreenshot = drawScreenshot; };
     uint32_t getTransactionFlags(uint32_t flags);
     uint32_t setTransactionFlags(uint32_t flags);
 
     void computeGeometry(const sp<const DisplayDevice>& hw, Mesh& mesh,
             bool useIdentityTransform) const;
+    void computeHWGeometry(Transform& tr, const Transform& layerTransform, const sp<const DisplayDevice>& hw) const;
     Rect computeBounds(const Region& activeTransparentRegion) const;
     Rect computeBounds() const;
 
@@ -162,6 +168,7 @@ public:
      * on the layer.  It does not examine the current plane alpha value.
      */
     virtual bool isOpaque(const Layer::State& s) const;
+    virtual void ReleaseOldBuffer();    //rk : for lcdc composer
 
     /*
      * isSecure - true if this surface is secure, that is if it prevents
@@ -201,7 +208,13 @@ public:
             HWComposer::HWCLayerInterface& layer);
     void setAcquireFence(const sp<const DisplayDevice>& hw,
             HWComposer::HWCLayerInterface& layer);
-
+    void setDisplayStereo(const sp<const DisplayDevice>& hw,
+            HWComposer::HWCLayerInterface& layer);
+    int32_t getAlreadyStereo(const sp<const DisplayDevice>& hw,
+            HWComposer::HWCLayerInterface& layer);
+    int getStereoModeToDraw()const;
+    void setAlreadyStereo(const sp<const DisplayDevice>& hw,
+            HWComposer::HWCLayerInterface& layer,int flag);
     Rect getPosition(const sp<const DisplayDevice>& hw);
 
     /*
@@ -231,6 +244,12 @@ public:
     void draw(const sp<const DisplayDevice>& hw, bool useIdentityTransform) const;
     void draw(const sp<const DisplayDevice>& hw) const;
 
+#ifdef ENABLE_VR
+	bool detect3dVideo() const;
+	void print3dLog(int alreadyStereo, int displayStereo) const;
+	void setStereoDraw(const sp<const DisplayDevice>& hw, RenderEngine& engine,
+	Mesh& mMesh, int alreadyStereo, int displayStereo) const;
+#endif
     /*
      * doTransaction - process the transaction. This is a good place to figure
      * out which attributes of the surface have changed.
@@ -390,6 +409,8 @@ private:
     bool mFiltering;
     // Whether filtering is needed b/c of the drawingstate
     bool mNeedsFiltering;
+    bool mDrawingScreenshot;
+    uint32_t    mLastRealtransform;
     // The mesh used to draw the layer in GLES composition mode
     mutable Mesh mMesh;
     // The texture used to draw the layer in GLES composition mode

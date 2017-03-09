@@ -61,9 +61,20 @@ protected:
     virtual void disableBlending();
 
     virtual void drawMesh(const Mesh& mesh);
-
+#ifdef ENABLE_VR
+    virtual void drawLeftFBO(const Mesh& mesh);
+    virtual void drawRightFBO(const Mesh& mesh);
+    virtual void enableRightFBO(bool key);
+	virtual void clearFbo();
+	virtual bool queryCaptureScreen();
+    virtual void beginGroup(const mat4& colorTransform,int mode);
+	virtual void setTargetDpyXY(int x, int y, int dpyId);
+    virtual void endGroup(int mode);
+	virtual void isVideo3dFormat(int mode);
+#else
     virtual void beginGroup(const mat4& colorTransform);
     virtual void endGroup();
+#endif
 
     virtual size_t getMaxTextureSize() const;
     virtual size_t getMaxViewportDims() const;

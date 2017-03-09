@@ -78,6 +78,17 @@ enum {
     eDisplayTransactionNeeded = 0x04,
     eTransactionMask          = 0x07
 };
+enum
+{
+    /* NOTE: These enums are unknown to Android.
+     * Android only checks against HWC_FRAMEBUFFER.
+     * This layer is to be drawn into the framebuffer by hwc blitter */
+    //HWC_TOWIN0 = 0x10,
+    //HWC_TOWIN1,
+    HWC_BLITTER = 100,
+    HWC_DIM,
+    HWC_CLEAR_HOLE
+};
 
 class SurfaceFlinger : public BnSurfaceComposer,
                        private IBinder::DeathRecipient,
@@ -125,6 +136,7 @@ public:
     // is received
     // TODO: this should be made accessible only to MessageQueue
     void onMessageReceived(int32_t what);
+    void debugShowFPS() const;
 
     // for debugging only
     // TODO: this should be made accessible only to HWComposer
@@ -133,6 +145,44 @@ public:
     RenderEngine& getRenderEngine() const {
         return *mRenderEngine;
     }
+
+    // see DisplayDevice::mHardwareOrientation
+    int mHardwareOrientation;
+    // Get hardware orientation
+    int getHardwareOrientation() const { return mHardwareOrientation; }
+    /**
+     * orientation_of_pre_rotated_display 是否是 90 度的整数倍.
+     * 若是, 则 pre_rotated_display 的 "宽度 和 高度", 将分别是 original_display 的 "高度 和 宽度".
+     */
+    bool orientationSwap() const { return mHardwareOrientation % 2; }       // .T : 改名称.
+
+    int mUseLcdcComposer;
+	Mutex  mCaptureScreenLock;
+    bool ReleaseOldBuffer(void);    //rk : for lcdc composer
+
+    /* ------------------------------------------------------------------------
+    * H/W composer
+    */
+    HWComposer& getHwComposer() const { return *mHwc; }
+
+    class SimilarityThread : public Thread {
+        //HWComposer& mHwc;
+        RenderEngine& mEngineInSimilarity;
+        //void * context;
+        mutable Mutex mLock;
+        Condition mCondition;
+        bool mEnabled;
+        //mutable nsecs_t mNextFakeVSync;
+        //nsecs_t mRefreshPeriod;
+        virtual void onFirstRef();
+        virtual bool threadLoop();
+    public:
+        SimilarityThread(RenderEngine& engine/*HWComposer& hwc*/);
+        void setEnabled(bool enabled);
+    };
+
+    sp<SimilarityThread> mSimilarityThread;
+    //void * similarityContext;
 
 private:
     friend class Client;
@@ -183,6 +233,9 @@ private:
     /* ------------------------------------------------------------------------
      * IBinder interface
      */
+#ifdef ENABLE_VR
+    void setListState(char *name, bool state);
+#endif
     virtual status_t onTransact(uint32_t code, const Parcel& data,
         Parcel* reply, uint32_t flags);
     virtual status_t dump(int fd, const Vector<String16>& args);
@@ -362,12 +415,6 @@ private:
     int32_t allocateHwcDisplayId(DisplayDevice::DisplayType type);
 
     /* ------------------------------------------------------------------------
-     * H/W composer
-     */
-
-    HWComposer& getHwComposer() const { return *mHwc; }
-
-    /* ------------------------------------------------------------------------
      * Compositing
      */
     void invalidateHwcGeometry();
@@ -469,7 +516,7 @@ private:
     volatile nsecs_t mDebugInTransaction;
     nsecs_t mLastTransactionTime;
     bool mBootFinished;
-
+    int mWfdOptimize;
     // these are thread safe
     mutable MessageQueue mEventQueue;
     FrameTracker mAnimFrameTracker;
@@ -487,12 +534,19 @@ private:
     /* ------------------------------------------------------------------------
      * Feature prototyping
      */
-
-    Daltonizer mDaltonizer;
-    bool mDaltonize;
-
     mat4 mColorMatrix;
     bool mHasColorMatrix;
+    Daltonizer mDaltonizer;
+    bool mDaltonize;
+#ifdef ENABLE_VR
+    bool m3dEnabled;
+	bool hasVideoLayer;
+#endif
+    int mDebugFPS;
+
+    // add by rk for workwround some display issue.
+    int mSkipFlag;
+    int mDelayFlag;
 };
 
 }; // namespace android

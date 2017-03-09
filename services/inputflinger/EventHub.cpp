@@ -1164,7 +1164,7 @@ status_t EventHub::openDeviceLocked(const char *devicePath) {
             || containsNonZeroByte(device->keyBitmask, sizeof_bit_array(BTN_JOYSTICK),
                     sizeof_bit_array(BTN_DIGI));
     if (haveKeyboardKeys || haveGamepadButtons) {
-        device->classes |= INPUT_DEVICE_CLASS_KEYBOARD;
+        device->classes |= INPUT_DEVICE_CLASS_KEYBOARD | INPUT_DEVICE_CLASS_KEYMOUSE;
     }
 
     // See if this is a cursor device such as a trackball or mouse.
@@ -1369,6 +1369,12 @@ void EventHub::createVirtualKeyboardLocked() {
 }
 
 void EventHub::addDeviceLocked(Device* device) {
+    /**xzj add start to filter repeat device*/
+    Device* targetDevice = getDeviceByPathLocked(device->path.string());
+    if(targetDevice){
+    	return;
+    }
+    /**end*/
     mDevices.add(device->id, device);
     device->next = mOpeningDevices;
     mOpeningDevices = device;

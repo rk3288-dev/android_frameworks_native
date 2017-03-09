@@ -304,7 +304,7 @@ status_t BnGraphicBufferProducer::onTransact(
             uint32_t h      = data.readInt32();
             uint32_t format = data.readInt32();
             uint32_t usage  = data.readInt32();
-            int buf;
+            int buf = 0;
             sp<Fence> fence;
             int result = dequeueBuffer(&buf, &fence, async, w, h, format, usage);
             reply->writeInt32(buf);
@@ -344,7 +344,7 @@ status_t BnGraphicBufferProducer::onTransact(
             CHECK_INTERFACE(IGraphicBufferProducer, data, reply);
             sp<GraphicBuffer> buffer = new GraphicBuffer();
             data.read(*buffer.get());
-            int slot;
+            int slot = 0;
             int result = attachBuffer(&slot, buffer);
             reply->writeInt32(slot);
             reply->writeInt32(result);
@@ -357,6 +357,7 @@ status_t BnGraphicBufferProducer::onTransact(
             QueueBufferOutput* const output =
                     reinterpret_cast<QueueBufferOutput *>(
                             reply->writeInplace(sizeof(QueueBufferOutput)));
+            memset(output, 0, sizeof(QueueBufferOutput));
             status_t result = queueBuffer(buf, input, output);
             reply->writeInt32(result);
             return NO_ERROR;
@@ -371,7 +372,7 @@ status_t BnGraphicBufferProducer::onTransact(
         } break;
         case QUERY: {
             CHECK_INTERFACE(IGraphicBufferProducer, data, reply);
-            int value;
+            int value = 0;
             int what = data.readInt32();
             int res = query(what, &value);
             reply->writeInt32(value);
@@ -433,6 +434,7 @@ size_t IGraphicBufferProducer::QueueBufferInput::getFlattenedSize() const {
     return sizeof(timestamp)
          + sizeof(isAutoTimestamp)
          + sizeof(crop)
+         + sizeof(dirtyRect)
          + sizeof(scalingMode)
          + sizeof(transform)
          + sizeof(stickyTransform)
@@ -453,6 +455,7 @@ status_t IGraphicBufferProducer::QueueBufferInput::flatten(
     FlattenableUtils::write(buffer, size, timestamp);
     FlattenableUtils::write(buffer, size, isAutoTimestamp);
     FlattenableUtils::write(buffer, size, crop);
+    FlattenableUtils::write(buffer, size, dirtyRect);
     FlattenableUtils::write(buffer, size, scalingMode);
     FlattenableUtils::write(buffer, size, transform);
     FlattenableUtils::write(buffer, size, stickyTransform);
@@ -467,6 +470,7 @@ status_t IGraphicBufferProducer::QueueBufferInput::unflatten(
               sizeof(timestamp)
             + sizeof(isAutoTimestamp)
             + sizeof(crop)
+            + sizeof(dirtyRect)
             + sizeof(scalingMode)
             + sizeof(transform)
             + sizeof(stickyTransform)
@@ -479,6 +483,7 @@ status_t IGraphicBufferProducer::QueueBufferInput::unflatten(
     FlattenableUtils::read(buffer, size, timestamp);
     FlattenableUtils::read(buffer, size, isAutoTimestamp);
     FlattenableUtils::read(buffer, size, crop);
+    FlattenableUtils::read(buffer, size, dirtyRect);
     FlattenableUtils::read(buffer, size, scalingMode);
     FlattenableUtils::read(buffer, size, transform);
     FlattenableUtils::read(buffer, size, stickyTransform);

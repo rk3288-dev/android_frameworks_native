@@ -18,15 +18,27 @@
 #ifndef SF_GLES20RENDERENGINE_H_
 #define SF_GLES20RENDERENGINE_H_
 
+typedef unsigned int uint32_t;
+
 #include <stdint.h>
 #include <sys/types.h>
 
 #include <GLES2/gl2.h>
 #include <Transform.h>
 
+#include "Program.h"
+#include "Mesh.h"
 #include "RenderEngine.h"
 #include "ProgramCache.h"
 #include "Description.h"
+
+#include <ctime>
+
+#define LEFT 1
+#define RIGHT 2
+#define DISPLAY_NUM 2
+#define ZOOM_OUT_LEVEL 4
+#define DETECT_3D_RATE 10
 
 // ---------------------------------------------------------------------------
 namespace android {
@@ -42,6 +54,56 @@ class GLES20RenderEngine : public RenderEngine {
     GLint mMaxTextureSize;
     GLuint mVpWidth;
     GLuint mVpHeight;
+    GLuint VRMeshBuffer;
+    GLuint tname, name;
+    GLuint leftFbo, leftTex;
+    GLuint rightFbo, rightTex;
+    bool useRightFBO;
+    void * context;
+
+	struct MeshBuffer{
+		GLuint bufferHandle;
+		GLuint last_x;
+		GLuint last_y;
+		GLboolean reCompute;
+	};
+
+    struct VRInfoTable {
+		GLboolean startFlag;
+		int dpyId;
+
+		struct MeshBuffer MeshData[DISPLAY_NUM];
+
+		GLuint leftFbo[DISPLAY_NUM];
+		GLuint leftTex[DISPLAY_NUM];
+
+		GLuint rightFbo[DISPLAY_NUM];
+		GLuint rightTex[DISPLAY_NUM];
+
+		GLuint fboWidth[DISPLAY_NUM];
+		GLuint fboHeight[DISPLAY_NUM];
+
+		GLboolean captureTriggle;
+		GLuint fboCaptureScreen;
+    } mVR;
+
+	//add for similarity check
+	struct VRSimilarity{
+		GLuint checkLeftFBO[ZOOM_OUT_LEVEL+1];
+		GLuint checkRightFBO[ZOOM_OUT_LEVEL+1];
+		GLuint checkLeftTex[ZOOM_OUT_LEVEL+1];
+		GLuint checkRightTex[ZOOM_OUT_LEVEL+1];
+		GLuint fboWidth[ZOOM_OUT_LEVEL+1];
+		GLuint fboHeight[ZOOM_OUT_LEVEL+1];
+	} _test_simi;
+
+	float score_list[10];
+	float score;
+	uint32_t testCount;
+	clock_t start,stop,diff;
+	uint32_t * leftCheck;
+	uint32_t * rightCheck;
+	//add end
 
     struct Group {
         GLuint texture;
@@ -77,8 +139,35 @@ protected:
 
     virtual void drawMesh(const Mesh& mesh);
 
+#ifdef ENABLE_VR
+    virtual void initVRInfoTable();
+    virtual void drawFBLeft();
+    virtual void drawFBRight();
+    virtual void drawLeftFBO(const Mesh& mesh);
+    virtual void drawRightFBO(const Mesh& mesh);
+    virtual void loadTexCoordsFB();
+    virtual void loadVerCoordsFB(int mode);
+    virtual GLuint genVRMeshBuffer(float halfWidth,float halfHeight);
+    virtual vec2 genDeformTex(vec2 tex,float k1,float k2);
+    virtual void enableRightFBO(bool key);
+    virtual bool checkVRPropertyChanged();
+	virtual void clearFbo();
+	virtual void setTargetDpyXY(int x, int y, int dpyId);
+	virtual void createFBO(int dpyId);
+	virtual void updateFBOSize(int dpyId);
+	virtual bool queryCaptureScreen();
+    virtual void beginGroup(const mat4& colorTransform,int mode);
+    virtual void endGroup(int mode);
+	virtual void isVideo3dFormat(int mode);
+	virtual void _test_CreateCheckFBO();
+	virtual float _test_Similarity();
+	virtual float _test_isSimilaryImages(const uint32_t* frame1,const uint32_t * frame2);
+	virtual void _test_drawMeshLeftCheckFBO(const Mesh& mesh, int fboId, int mode);
+	virtual void _test_drawMeshRightCheckFBO(const Mesh& mesh, int fboId, int mode);
+#else
     virtual void beginGroup(const mat4& colorTransform);
     virtual void endGroup();
+#endif
 
     virtual size_t getMaxTextureSize() const;
     virtual size_t getMaxViewportDims() const;

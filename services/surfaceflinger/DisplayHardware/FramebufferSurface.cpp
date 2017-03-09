@@ -37,7 +37,7 @@
 #include "HWComposer.h"
 
 #ifndef NUM_FRAMEBUFFER_SURFACE_BUFFERS
-#define NUM_FRAMEBUFFER_SURFACE_BUFFERS (2)
+#define NUM_FRAMEBUFFER_SURFACE_BUFFERS (3)
 #endif
 
 // ----------------------------------------------------------------------------
@@ -60,9 +60,17 @@ FramebufferSurface::FramebufferSurface(HWComposer& hwc, int disp,
 {
     mName = "FramebufferSurface";
     mConsumer->setConsumerName(mName);
-    mConsumer->setConsumerUsageBits(GRALLOC_USAGE_HW_FB |
+
+    if(disp == 1)
+    {
+        mConsumer->setConsumerUsageBits(GRALLOC_USAGE_HW_RENDER |
+                                       GRALLOC_USAGE_HW_COMPOSER);
+    } else {
+        mConsumer->setConsumerUsageBits(GRALLOC_USAGE_HW_FB |
                                        GRALLOC_USAGE_HW_RENDER |
                                        GRALLOC_USAGE_HW_COMPOSER);
+    }
+
     mConsumer->setDefaultBufferFormat(mHwc.getFormat(disp));
     mConsumer->setDefaultBufferSize(mHwc.getWidth(disp),  mHwc.getHeight(disp));
     mConsumer->setDefaultMaxBufferCount(NUM_FRAMEBUFFER_SURFACE_BUFFERS);

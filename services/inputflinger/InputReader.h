@@ -110,6 +110,21 @@ struct DisplayViewport {
         deviceWidth = width;
         deviceHeight = height;
     }
+
+    void copyFrom(const DisplayViewport& other) {
+        displayId = other.displayId;
+        orientation = other.orientation;
+        logicalLeft = other.logicalLeft;
+        logicalTop = other.logicalTop;
+        logicalRight = other.logicalRight;
+        logicalBottom = other.logicalBottom;
+        physicalLeft = other.physicalLeft;
+        physicalTop = other.physicalTop;
+        physicalRight = other.physicalRight;
+        physicalBottom = other.physicalBottom;
+        deviceWidth = other.deviceWidth;
+        deviceHeight = other.deviceHeight;
+    }
 };
 
 /*
@@ -385,7 +400,7 @@ public:
 
     virtual void disableVirtualKeysUntil(nsecs_t time) = 0;
     virtual bool shouldDropVirtualKey(nsecs_t now,
-            InputDevice* device, int32_t keyCode, int32_t scanCode) = 0;
+		    InputDevice* device, int32_t keyCode, int32_t scanCode) = 0;
 
     virtual void fadePointer() = 0;
 
@@ -645,7 +660,14 @@ private:
     bool mBtnForward;
     bool mBtnExtra;
     bool mBtnTask;
+    bool mBtnOk;
 
+  /*$_rbox_$_modify_$_zhangwen_20140219:  define the key ok for infrare mouse*/   
+  //$_rbox_$_modify_$_begin
+          bool mBtnOk1;
+          bool mBtnOk2;
+ 
+ //$_rbox_$_modify_$_end
     void clearButtons();
 };
 
@@ -1172,6 +1194,52 @@ private:
     void sync(nsecs_t when);
 };
 
+class KeyMouseInputMapper : public InputMapper {
+public:
+    KeyMouseInputMapper(InputDevice* device);
+    virtual ~KeyMouseInputMapper();
+
+    virtual uint32_t getSources();
+    virtual void populateDeviceInfo(InputDeviceInfo* deviceInfo);
+    virtual void dump(String8& dump);
+    virtual void configure(nsecs_t when, const InputReaderConfiguration* config, uint32_t changes);
+    virtual void reset(nsecs_t when);
+    virtual void process(const RawEvent* rawEvent);
+
+    virtual int32_t getScanCodeState(uint32_t sourceMask, int32_t scanCode);
+
+    virtual void fadePointer();
+
+
+private:
+    struct Accumulator {
+        enum {
+            FIELD_BTN_KEYOK=1,
+        };
+		bool btnKeyok;
+        uint32_t fields;
+        inline void clear() {
+            fields = 0;
+        }
+    } mAccumulator;
+
+
+   struct LockedState {
+        bool down;
+        nsecs_t downTime;
+    } mKeyLocked;
+
+
+    CursorButtonAccumulator mCursorButtonAccumulator;
+    sp<PointerControllerInterface> mPointerController;
+
+    int32_t mSource;
+    float mdeltax, mdeltay;
+    int32_t mButtonState;
+    nsecs_t mDownTime;
+    int mID;
+    void sync(nsecs_t when);
+};
 
 class TouchInputMapper : public InputMapper {
 public:

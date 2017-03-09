@@ -111,6 +111,11 @@ enum {
 #define MAX_POINTERS 16
 
 /*
+ * Maximum number of samples supported per motion event.
+ */
+#define MAX_SAMPLES UINT16_MAX
+
+/*
  * Maximum pointer id value supported in a motion event.
  * Smallest pointer id is 0.
  * (This is limited by our use of BitSet32 to track pointer assignments.)
@@ -208,7 +213,7 @@ struct PointerCoords {
 
     void scale(float scale);
     void applyOffset(float xOffset, float yOffset);
-
+	void transfromCoordinate(float posX, float posY, float scaleX, float scaleY);
     inline float getX() const {
         return getAxisValue(AMOTION_EVENT_AXIS_X);
     }
@@ -543,7 +548,7 @@ public:
     void offsetLocation(float xOffset, float yOffset);
 
     void scale(float scaleFactor);
-
+	void transformCoordinate(float posX, float posY, float scaleX, float scaleY);
     // Apply 3x3 perspective matrix transformation.
     // Matrix is in row-major form and compatible with SkMatrix.
     void transform(const float matrix[9]);

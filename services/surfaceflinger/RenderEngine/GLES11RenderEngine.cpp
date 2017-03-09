@@ -267,14 +267,43 @@ void GLES11RenderEngine::drawMesh(const Mesh& mesh) {
         glDisableClientState(GL_TEXTURE_COORD_ARRAY);
     }
 }
+#ifdef ENABLE_VR
+void GLES11RenderEngine::drawLeftFBO(const Mesh& mesh){
+}
+void GLES11RenderEngine::drawRightFBO(const Mesh& mesh){
+}
+void GLES11RenderEngine::enableRightFBO(bool key){
+}
+void GLES11RenderEngine::clearFbo(){
+}
+
+void GLES11RenderEngine::setTargetDpyXY(int x, int y, int dpyId){
+}
+
+bool GLES11RenderEngine::queryCaptureScreen() {
+     return true;
+}
+
+void GLES11RenderEngine::beginGroup(const mat4& ,int mode) {
+    // doesn't do anything in GLES 1.1
+}
+void GLES11RenderEngine::endGroup(int mode) {
+    // doesn't do anything in GLES 1.1
+}
+void GLES11RenderEngine::isVideo3dFormat(int mode){
+    // doesn't do anything in GLES 1.1
+}
+
+#else
 
 void GLES11RenderEngine::beginGroup(const mat4& /*colorTransform*/) {
     // doesn't do anything in GLES 1.1
 }
-
 void GLES11RenderEngine::endGroup() {
     // doesn't do anything in GLES 1.1
 }
+
+#endif
 
 void GLES11RenderEngine::dump(String8& result) {
     RenderEngine::dump(result);
